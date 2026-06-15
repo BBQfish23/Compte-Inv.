@@ -1,6 +1,6 @@
 """
 Comptage d'inventaire - Spa le Finlandais
-Application autonome de decompte. Optimisee mobile.
+Application autonome de decompte. Optimisee mobile, disposition compacte 2 colonnes.
 Aucune dependance externe : la liste de produits est integree ci-dessous.
 
 Lancement local :  streamlit run app.py
@@ -58,29 +58,42 @@ CATALOG = [
 ALL_PRODUCTS = [p for _, items in CATALOG for p in items]
 
 # --------------------------------------------------------------------------
-# Style mobile
+# Style mobile - disposition compacte
 # --------------------------------------------------------------------------
 st.markdown("""
 <style>
-  /* compacter la page sur mobile */
-  .block-container { padding-top: 1.2rem; padding-bottom: 5rem;
-                     max-width: 640px; }
-  /* gros boutons tactiles */
+  .block-container { padding-top: 1rem; padding-bottom: 5rem; max-width: 680px; }
+
+  /* boutons +/- compacts mais tactiles */
   div[data-testid="stButton"] button {
-      height: 52px; font-size: 24px; font-weight: 700;
-      border-radius: 14px; padding: 0;
+      height: 40px; font-size: 20px; font-weight: 700;
+      border-radius: 10px; padding: 0; min-width: 0;
   }
-  /* champ nombre plus grand */
-  div[data-testid="stNumberInput"] input { height: 44px; font-size: 18px;
-      text-align: center; }
-  /* titres de categorie */
-  h3 { margin-top: 0.4rem !important; margin-bottom: 0.2rem !important; }
-  /* barre total collante en haut */
+  /* champ nombre = la valeur centrale, bien visible et cliquable */
+  div[data-testid="stNumberInput"] input {
+      height: 40px; font-size: 20px; font-weight: 700; text-align: center;
+      padding: 0;
+  }
+  /* cacher les petits +/- natifs du number_input pour gagner de la place */
+  div[data-testid="stNumberInput"] button { display: none; }
+
+  /* nom de produit compact */
+  .prod-name { font-size: 13px; font-weight: 600; line-height: 1.15;
+      height: 32px; overflow: hidden; margin-bottom: 2px; }
+  .prod-name small { color: gray; font-weight: 400; }
+
+  /* resserrer l'espacement vertical des colonnes */
+  div[data-testid="stHorizontalBlock"] { gap: 0.4rem; margin-bottom: 0.3rem; }
+  div[data-testid="column"] { padding: 0 0.15rem; }
+
+  h3 { margin-top: 0.3rem !important; margin-bottom: 0.2rem !important;
+       font-size: 17px !important; }
+
   .total-bar {
       position: sticky; top: 0; z-index: 999;
       background: var(--background-color, #fff);
-      padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,0.2);
-      margin-bottom: 8px;
+      padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,0.2);
+      margin-bottom: 6px; font-size: 15px;
   }
 </style>
 """, unsafe_allow_html=True)
@@ -96,7 +109,9 @@ else:
 
 
 def bump(name, delta):
-    st.session_state.counts[name] = max(0, st.session_state.counts.get(name, 0) + delta)
+    new = max(0, st.session_state.counts.get(name, 0) + delta)
+    st.session_state.counts[name] = new
+    st.session_state[f"in_{name}"] = new   # garde le champ affiche synchronise
 
 
 def set_count(name):
@@ -107,6 +122,7 @@ def set_count(name):
 def reset_all():
     for p in ALL_PRODUCTS:
         st.session_state.counts[p] = 0
+        st.session_state[f"in_{p}"] = 0
 
 
 # --------------------------------------------------------------------------
@@ -120,42 +136,51 @@ counted = sum(1 for p in ALL_PRODUCTS if st.session_state.counts.get(p, 0) > 0)
 
 st.markdown(
     f"<div class='total-bar'><b>{total_units}</b> unités · "
-    f"{counted}/{len(ALL_PRODUCTS)} produits comptés</div>",
+    f"{counted}/{len(ALL_PRODUCTS)} comptés</div>",
     unsafe_allow_html=True)
 
 search = st.text_input("🔎 Rechercher", "", label_visibility="collapsed",
                        placeholder="🔎 Rechercher un produit…")
 s = search.strip().lower()
 
+
 # --------------------------------------------------------------------------
-# Liste par categorie (pliable)
+# Bloc produit (un quart de ligne : nom + [- valeur +])
+# --------------------------------------------------------------------------
+def product_block(name):
+    key = f"in_{name}"
+    if key not in st.session_state:
+        st.session_state[key] = st.session_state.counts.get(name, 0)
+    st.markdown(f"<div class='prod-name'>{name}</div>", unsafe_allow_html=True)
+    bminus, bval, bplus = st.columns([1, 1.3, 1])
+    with bminus:
+        st.button("➖", key=f"m_{name}", use_container_width=True,
+                  on_click=bump, args=(name, -1))
+    with bval:
+        st.number_input("n", min_value=0, step=1,
+                        key=key, label_visibility="collapsed",
+                        on_change=set_count, args=(name,))
+    with bplus:
+        st.button("➕", key=f"p_{name}", use_container_width=True,
+                  on_click=bump, args=(name, 1))
+
+
+# --------------------------------------------------------------------------
+# Liste par categorie (pliable), 2 produits de large
 # --------------------------------------------------------------------------
 for cat_name, items in CATALOG:
     visible = [p for p in items if not s or s in p.lower()]
     if not visible:
         continue
-    # ouvert par defaut si recherche active, sinon plie
     with st.expander(f"{cat_name}  ·  {len(visible)}", expanded=bool(s)):
-        for name in visible:
-            cur = st.session_state.counts.get(name, 0)
-            st.markdown(f"**{name}**")
-            minus, val, plus, setc = st.columns([1.2, 1, 1.2, 1.6])
-            with minus:
-                st.button("➖", key=f"m_{name}", use_container_width=True,
-                          on_click=bump, args=(name, -1))
-            with val:
-                st.markdown(
-                    f"<div style='text-align:center;font-size:24px;"
-                    f"font-weight:700;padding-top:8px'>{cur}</div>",
-                    unsafe_allow_html=True)
-            with plus:
-                st.button("➕", key=f"p_{name}", use_container_width=True,
-                          on_click=bump, args=(name, 1))
-            with setc:
-                st.number_input("n", min_value=0, step=1, value=cur,
-                                key=f"in_{name}", label_visibility="collapsed",
-                                on_change=set_count, args=(name,))
-            st.divider()
+        # rendre les produits par paires (2 colonnes)
+        for i in range(0, len(visible), 2):
+            left, right = st.columns(2)
+            with left:
+                product_block(visible[i])
+            with right:
+                if i + 1 < len(visible):
+                    product_block(visible[i + 1])
 
 # --------------------------------------------------------------------------
 # Actions : reset + export
@@ -165,7 +190,6 @@ if st.button("🔄 Reset (tout à zéro)", use_container_width=True):
     reset_all()
     st.rerun()
 
-# Donnees d'export (tous les produits)
 records = []
 for cat_name, items in CATALOG:
     for name in items:
@@ -173,7 +197,6 @@ for cat_name, items in CATALOG:
                         "Compte": st.session_state.counts.get(name, 0)})
 export_df = pd.DataFrame(records)
 
-# Corps courriel groupe par categorie
 lines = ["Comptage d'inventaire - Spa le Finlandais",
          f"Date : {date.today().isoformat()}",
          f"Total unités : {total_units}", ""]
