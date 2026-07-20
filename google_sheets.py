@@ -93,11 +93,19 @@ def _string(value: Any) -> str:
 class GoogleSheetsStore:
     def __init__(self, spreadsheet: Any):
         self.spreadsheet = spreadsheet
+        self._worksheet_cache: dict[str, Any] = {}
+        self._products_cache: list[Product] | None = None
+        self._configuration_cache: dict[str, str] | None = None
 
     def _worksheet(self, title: str) -> Any:
+        cached = self._worksheet_cache.get(title)
+        if cached is not None:
+            return cached
         try:
-            return self.spreadsheet.worksheet(title)
-        except Exception as exc:
+            worksheet = self.spreadsheet.worksheet(title)
+            self._worksheet_cache[title] = worksheet
+            return worksheet
+        except Exception as exc:  # provider-specific exception types are optional
             raise GoogleSheetsError(f"Impossible d’ouvrir l’onglet {title!r}.") from exc
 
     def ensure_schema(
@@ -108,6 +116,7 @@ class GoogleSheetsStore:
 
         try:
             existing = {worksheet.title: worksheet for worksheet in self.spreadsheet.worksheets()}
+            self._worksheet_cache.update(existing)
             for title, headers in SHEET_HEADERS.items():
                 worksheet = existing.get(title)
                 if worksheet is None:
@@ -117,6 +126,7 @@ class GoogleSheetsStore:
                         cols=max(12, len(headers)),
                     )
                     existing[title] = worksheet
+                    self._worksheet_cache[title] = worksheet
 
                 values = worksheet.get_all_values()
                 if not values:
@@ -132,11 +142,14 @@ class GoogleSheetsStore:
                     )
 
             products_ws = existing["Produits"]
-            if not products_ws.get_all_records():
+            product_records = products_ws.get_all_records()
+            if not product_records:
                 products_ws.append_rows(
                     [[row.get(header, "") for header in PRODUCT_HEADERS] for row in default_products],
                     value_input_option="USER_ENTERED",
                 )
+                product_records = [dict(row) for row in default_products]
+            self._products_cache = parse_products(product_records)
 
             config_ws = existing["Configuration"]
             current_config = {
@@ -151,6 +164,8 @@ class GoogleSheetsStore:
             ]
             if missing:
                 config_ws.append_rows(missing, value_input_option="USER_ENTERED")
+                current_config.update(dict(missing))
+            self._configuration_cache = dict(current_config)
         except GoogleSheetsError:
             raise
         except Exception as exc:
@@ -159,21 +174,29 @@ class GoogleSheetsStore:
             ) from exc
 
     def load_products(self) -> list[Product]:
+        if self._products_cache is not None:
+            return list(self._products_cache)
         try:
-            return parse_products(self._worksheet("Produits").get_all_records())
+            products = parse_products(self._worksheet("Produits").get_all_records())
+            self._products_cache = products
+            return list(products)
         except (GoogleSheetsError, CatalogValidationError):
             raise
         except Exception as exc:
             raise GoogleSheetsError("Impossible de charger le catalogue de produits.") from exc
 
     def load_configuration(self) -> dict[str, str]:
+        if self._configuration_cache is not None:
+            return dict(self._configuration_cache)
         try:
             rows = self._worksheet("Configuration").get_all_records()
-            return {
+            configuration = {
                 _string(row.get("key")): _string(row.get("value"))
                 for row in rows
                 if _string(row.get("key"))
             }
+            self._configuration_cache = configuration
+            return dict(configuration)
         except GoogleSheetsError:
             raise
         except Exception as exc:
@@ -290,7 +313,10 @@ class GoogleSheetsStore:
         *,
         verified: bool = True,
     ) -> dict[str, Any]:
-        session = self.get_session(session_id)
+        session_record, session_row = self._find_record_with_row(
+            "Sessions", "session_id", session_id
+        )
+        session = self._normalize_session(session_record)
         try:
             assert_session_editable(_string(session.get("status")))
         except Exception as exc:
@@ -315,6 +341,10 @@ class GoogleSheetsStore:
         if _string(record.get("session_id")) != session_id:
             raise GoogleSheetsError("Ce comptage n’appartient pas à la session active.")
 
+        was_verified = is_verified(record)
+        previous_quantity = quantity_value(record.get("quantity")) if was_verified else 0
+        new_quantity = quantity_value(normalized_quantity) if verified else 0
+
         record.update(
             {
                 "quantity": normalized_quantity,
@@ -324,7 +354,22 @@ class GoogleSheetsStore:
             }
         )
         self._write_record("Comptages", row_number, COUNT_HEADERS, record)
-        self._refresh_session_summary(session_id)
+
+        verified_delta = int(bool(verified)) - int(was_verified)
+        session_record.update(
+            {
+                "verified_count": max(
+                    0, quantity_value(session.get("verified_count")) + verified_delta
+                ),
+                "total_units": max(
+                    0,
+                    quantity_value(session.get("total_units"))
+                    - previous_quantity
+                    + new_quantity,
+                ),
+            }
+        )
+        self._write_record("Sessions", session_row, SESSION_HEADERS, session_record)
         return self._normalize_count(record)
 
     def complete_session(self, session_id: str) -> dict[str, Any]:
