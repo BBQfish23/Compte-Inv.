@@ -25,7 +25,7 @@ Tous les produits actifs apparaissent dans les trois emplacements. Une seule per
 - Chaque validation est sauvegardée immédiatement dans Google Sheets.
 - Une session non terminée peut être reprise.
 - Une session terminée est verrouillée par défaut.
-- Le reset exige une confirmation explicite.
+- L’abandon ou la remise à zéro exige une confirmation explicite et ne supprime pas silencieusement l’historique.
 
 ## 3. Architecture de l’application
 
@@ -65,7 +65,7 @@ Il doit notamment :
 - calculer la progression;
 - calculer les totaux par produit et par emplacement;
 - déterminer si une session peut être terminée;
-- empêcher la modification d’une session terminée.
+- empêcher la modification d’une session terminée ou abandonnée.
 
 ### `google_sheets.py`
 
@@ -78,7 +78,7 @@ Il doit notamment :
 - créer les lignes de comptage associées;
 - enregistrer une quantité et son état de vérification;
 - retrouver la dernière session non terminée;
-- terminer ou rouvrir explicitement une session;
+- terminer, abandonner ou rouvrir explicitement une session;
 - transformer les erreurs Google en messages utiles pour l’interface.
 
 ### `tests/`
@@ -112,8 +112,8 @@ Une ligne par inventaire.
 | `session_id` | texte | UUID unique |
 | `employee_name` | texte | Nom saisi librement au début |
 | `started_at` | date-heure | Début de la session |
-| `completed_at` | date-heure ou vide | Fin de la session |
-| `status` | texte | `IN_PROGRESS`, `COMPLETED` ou `REOPENED` |
+| `ended_at` | date-heure ou vide | Fin, abandon ou fermeture de la session |
+| `status` | texte | `IN_PROGRESS`, `COMPLETED`, `REOPENED` ou `ABANDONED` |
 | `verified_count` | entier | Nombre de lignes vérifiées |
 | `total_count` | entier | Nombre total de lignes attendues |
 | `total_units` | entier | Somme des quantités enregistrées |
@@ -243,25 +243,25 @@ Le bouton `Terminer l’inventaire` est désactivé tant que des lignes ne sont 
 À la fermeture :
 
 - la session passe à `COMPLETED`;
-- `completed_at` est enregistré;
+- `ended_at` est enregistré;
 - la session devient non modifiable;
 - un rapport CSV peut être téléchargé;
 - un résumé prêt à transmettre est généré à partir des données sauvegardées.
 
-Une session terminée peut seulement être modifiée après une action explicite `Rouvrir la session`, accompagnée d’une confirmation.
+Une session terminée peut seulement être modifiée après une action explicite `Rouvrir la session`, accompagnée d’une confirmation. La réouverture passe son statut à `REOPENED` et efface `ended_at` jusqu’à sa prochaine fermeture.
 
-## 10. Reset et abandon
+## 10. Abandon et remise à zéro
 
-Le reset complet n’est jamais exécuté par un simple clic.
+Aucune session n’est abandonnée ou remise à zéro par un simple clic.
 
 L’utilisateur doit :
 
 1. ouvrir la section de danger;
-2. cliquer sur `Abandonner et effacer cette session`;
+2. cliquer sur `Abandonner cette session`;
 3. saisir exactement `EFFACER`;
 4. confirmer une deuxième fois.
 
-L’abandon doit changer le statut de la session plutôt que supprimer silencieusement son historique. Les lignes peuvent être conservées avec un statut d’abandon afin de permettre un audit minimal.
+L’abandon passe la session à `ABANDONED`, inscrit `ended_at` et conserve les lignes existantes pour l’historique. Pour recommencer à zéro, l’utilisateur crée ensuite une nouvelle session. Aucune ligne historique n’est supprimée automatiquement.
 
 ## 11. Gestion des erreurs
 
@@ -279,9 +279,9 @@ Cette conservation temporaire ne garantit pas la survie à une fermeture ou à u
 
 L’application bloque la création d’une nouvelle session et affiche les erreurs précises : identifiant manquant, doublon, ordre invalide ou nom vide.
 
-### Session terminée
+### Session terminée ou abandonnée
 
-Toute tentative de modification est refusée tant que la session n’a pas été rouverte explicitement.
+Toute tentative de modification est refusée tant que la session n’a pas été rouverte explicitement. Une session abandonnée n’est pas proposée automatiquement à la reprise.
 
 ### Secrets manquants
 
@@ -316,7 +316,7 @@ Les versions seront fixées à des versions testées afin d’éviter qu’une m
 - Le total produit additionne correctement les trois emplacements.
 - Le total par emplacement additionne correctement tous les produits.
 - Une session ne peut pas être terminée avec des lignes non vérifiées lorsque la configuration l’interdit.
-- Une session terminée refuse les modifications.
+- Une session terminée ou abandonnée refuse les modifications.
 
 ### Catalogue
 
@@ -328,6 +328,7 @@ Les versions seront fixées à des versions testées afin d’éviter qu’une m
 ### Persistance
 
 - Une session interrompue peut être retrouvée et reprise.
+- Une session abandonnée n’est pas proposée automatiquement à la reprise.
 - Une sauvegarde échouée ne fait pas avancer le comptage.
 - Une sauvegarde réussie met à jour la progression de la session.
 - La réouverture explicite d’une session terminée permet de nouveau les modifications.
@@ -354,6 +355,6 @@ La version est considérée réussie lorsque :
 5. Une session interrompue peut être reprise sans perdre les données déjà confirmées.
 6. Le catalogue peut être modifié dans Google Sheets sans toucher au code.
 7. Le résumé consolide correctement les trois emplacements.
-8. Un inventaire terminé est verrouillé.
-9. Le reset ou l’abandon exige la saisie de `EFFACER`.
+8. Un inventaire terminé ou abandonné est verrouillé.
+9. L’abandon exige la saisie de `EFFACER` et conserve l’historique.
 10. Les tests automatisés couvrent les règles critiques décrites ci-dessus.
